@@ -160,14 +160,15 @@ AM_CONFIG=./secrets/apple-music-config.yaml
 
 ```cron
 30 7 * * * /path/to/netease-apple-daily/run.sh >> /path/to/netease-apple-daily/logs/cron.log 2>&1
-# 回写可更勤（示例每 6 小时），与日推错开
-0 */6 * * * /path/to/netease-apple-daily/run_feedback.sh >> /path/to/netease-apple-daily/logs/cron.log 2>&1
+# 回写每 24 小时（示例 20:00，与日推 07:30 错开）
+0 20 * * * /path/to/netease-apple-daily/run_feedback.sh >> /path/to/netease-apple-daily/logs/cron.log 2>&1
 ```
 
-或摘要模式（日推）：
+或摘要模式（适合 bot 投递）：
 
 ```cron
 30 7 * * * /usr/bin/python3 /path/to/netease-apple-daily/scripts/cron_summary.py
+0 20 * * * /usr/bin/python3 /path/to/netease-apple-daily/scripts/feedback_summary.py
 ```
 
 ### Hermes Agent（可选）

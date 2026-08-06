@@ -27,12 +27,19 @@ ln -sf /path/to/netease-apple-daily/scripts/cron_summary.py \
 
 `cron_summary.py` 为 `--no-agent` 模式：stdout 即投递正文。
 
-回写（Apple 喜爱/最近播放 → 网易云）可用：
+回写（Apple 喜爱/最近播放 → 网易云）建议 **每 24 小时**一次，与日推错开：
 
 ```bash
-# 建议先 dry-run，再挂 cron（与日推错开）
-/path/to/netease-apple-daily/run_feedback.sh --dry-run --limit 5
-# hermes cron: 0 */6 * * * → run_feedback.sh
+# 包装脚本（stdout 投递）
+ln -sf /path/to/netease-apple-daily/scripts/feedback_summary.py \
+  ~/.hermes/scripts/netease_apple_feedback.py
+
+# 每晚 20:00（示例）
+hermes cron create '0 20 * * *' \
+  --name 'Apple→网易云回写' \
+  --script netease_apple_feedback.py \
+  --no-agent \
+  --deliver telegram:YOUR_CHAT_ID
 ```
 
 ## 3. 登录

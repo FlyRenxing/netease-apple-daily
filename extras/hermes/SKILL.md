@@ -22,7 +22,8 @@ metadata:
 | api-enhanced | Docker `ncm-api` → `127.0.0.1:3000` |
 | 网易云 cookie | `$ROOT/data/cookie.txt` |
 | Apple Music | `MUSIC_USER_TOKEN` 或 `AM_CONFIG` 中的 `media-user-token` |
-| 定时 | `scripts/cron_summary.py`（`--no-agent`） |
+| 定时日推 | `scripts/cron_summary.py`（`--no-agent`） |
+| 定时回写 | `scripts/feedback_summary.py`（每 24h，喜爱+最近播放→网易云） |
 
 ---
 
