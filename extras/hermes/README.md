@@ -27,6 +27,14 @@ ln -sf /path/to/netease-apple-daily/scripts/cron_summary.py \
 
 `cron_summary.py` 为 `--no-agent` 模式：stdout 即投递正文。
 
+回写（Apple 喜爱/最近播放 → 网易云）可用：
+
+```bash
+# 建议先 dry-run，再挂 cron（与日推错开）
+/path/to/netease-apple-daily/run_feedback.sh --dry-run --limit 5
+# hermes cron: 0 */6 * * * → run_feedback.sh
+```
+
 ## 3. 登录
 
 对 Hermes 说「网易云日推登录」，按 skill：`qr-init` → 发二维码图 → `qr-poll`。
