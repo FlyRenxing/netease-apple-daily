@@ -1,0 +1,29 @@
+# secrets & local state
+config.env
+data/**
+!data/.gitkeep
+logs/**
+!logs/.gitkeep
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# local overrides
+*.local
+.env
+.env.*
+
+# optional local apple token yaml
+secrets/**
+!secrets/.gitkeep

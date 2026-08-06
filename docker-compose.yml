@@ -1,0 +1,26 @@
+# NeteaseCloudMusicApi-enhanced
+# Upstream: https://github.com/NeteaseCloudMusicApiEnhanced/api-enhanced
+# Image:    moefurina/ncm-api
+services:
+  ncm-api:
+    image: moefurina/ncm-api:latest
+    container_name: ncm-api
+    restart: unless-stopped
+    ports:
+      # bind localhost only — do not expose publicly without auth
+      - "127.0.0.1:3000:3000"
+    environment:
+      # clear proxy env so container is not broken by host HTTP(S)_PROXY
+      - http_proxy=
+      - https_proxy=
+      - HTTP_PROXY=
+      - HTTPS_PROXY=
+      - no_proxy=
+      - NO_PROXY=
+      - ENABLE_GENERAL_UNBLOCK=false
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
