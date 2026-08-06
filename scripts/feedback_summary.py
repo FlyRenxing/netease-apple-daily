@@ -62,8 +62,17 @@ def main() -> int:
     scrob = man.get("scrobble") or {}
     dry = man.get("dry_run")
 
-    if proc.returncode == 0:
-        print("OK: Apple Music → NetEase feedback")
+    # 即使 exit!=0，若 manifest 有部分成功也先报结果
+    has_progress = bool(
+        likes.get("liked")
+        or likes.get("already_liked")
+        or scrob.get("scrobbled")
+        or scrob.get("seed_only")
+    )
+
+    if proc.returncode == 0 or has_progress:
+        status = "OK" if proc.returncode == 0 else "PARTIAL"
+        print(f"{status}: Apple Music → NetEase feedback")
         if dry:
             print("mode: dry-run")
         print(
@@ -71,6 +80,7 @@ def main() -> int:
             f"(matched {likes.get('matched', '?')}, "
             f"unmatched {likes.get('unmatched', 0)}, "
             f"already {likes.get('already_liked', 0)}, "
+            f"errors {likes.get('errors', 0)}, "
             f"src {likes.get('source_total', '?')})"
         )
         if scrob.get("seed_only"):
@@ -85,7 +95,9 @@ def main() -> int:
                 f"unmatched {scrob.get('unmatched', 0)}, "
                 f"window {scrob.get('source_total', '?')})"
             )
-        return 0
+        if proc.returncode != 0 and likes.get("errors"):
+            print("note: some likes hit rate-limit; will continue next run")
+        return 0 if has_progress else (proc.returncode or 1)
 
     print("ERROR: feedback sync failed")
     print(f"exit={proc.returncode}")

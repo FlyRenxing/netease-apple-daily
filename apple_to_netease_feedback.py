@@ -65,7 +65,9 @@ FEEDBACK_MAX_SCROBBLE_PER_RUN = _env_int("FEEDBACK_MAX_SCROBBLE_PER_RUN", 25)
 FEEDBACK_MAX_LIKE_SCAN_PER_RUN = _env_int("FEEDBACK_MAX_LIKE_SCAN_PER_RUN", 80)
 FEEDBACK_MIN_SCORE = float(os.environ.get("FEEDBACK_MIN_SCORE", "55") or "55")
 FEEDBACK_SCROBBLE_TIME = _env_int("FEEDBACK_SCROBBLE_TIME", 240)
-FEEDBACK_REQUEST_SLEEP = float(os.environ.get("FEEDBACK_REQUEST_SLEEP", "0.35") or "0.35")
+# 红心接口易 405，默认稍慢
+FEEDBACK_REQUEST_SLEEP = float(os.environ.get("FEEDBACK_REQUEST_SLEEP", "1.2") or "1.2")
+FEEDBACK_LIKE_SLEEP = float(os.environ.get("FEEDBACK_LIKE_SLEEP", "2.0") or "2.0")
 # 首次运行只做 recent 快照、不 scrobble（避免把整窗历史一次打卡）
 FEEDBACK_SCROBBLE_SEED_ONLY_FIRST = _env_bool("FEEDBACK_SCROBBLE_SEED_ONLY_FIRST", True)
 
@@ -468,12 +470,31 @@ def ncm_likelist_ids(cookie: str, uid: int) -> set[int]:
     return {int(x) for x in ids if x is not None}
 
 
-def ncm_like(cookie: str, song_id: int, like: bool = True) -> dict[str, Any]:
-    return dr.ncm_get(
-        "/like",
-        cookie,
-        {"id": str(song_id), "like": "true" if like else "false"},
-    )
+def ncm_like(
+    cookie: str,
+    song_id: int,
+    like: bool = True,
+    retries: int = 3,
+) -> dict[str, Any]:
+    """红心；遇 405「操作频繁」指数退避重试。"""
+    last: dict[str, Any] = {}
+    for attempt in range(retries + 1):
+        last = dr.ncm_get(
+            "/like",
+            cookie,
+            {"id": str(song_id), "like": "true" if like else "false"},
+        )
+        code = last.get("code")
+        if code in (200, None):
+            return last
+        msg = str(last.get("msg") or last.get("message") or "")
+        if code == 405 or "频繁" in msg:
+            wait = 8 * (attempt + 1) + (attempt * 2)
+            log(f"  红心限流 code={code}，{wait}s 后重试 ({attempt + 1}/{retries})")
+            time.sleep(wait)
+            continue
+        return last
+    return last
 
 
 def ncm_scrobble(
@@ -641,6 +662,12 @@ def sync_likes(
                 row["action"] = "error"
                 row["error"] = resp
                 stats["errors"] += 1
+                # 持续限流则提前结束本轮，留给下次 cron
+                msg = str(resp.get("msg") or resp.get("message") or "")
+                if code == 405 or "频繁" in msg:
+                    log("  触发限流，本轮红心提前结束")
+                    stats["items"].append(row)
+                    break
             else:
                 log("  已红心")
                 row["action"] = "liked"
@@ -649,7 +676,7 @@ def sync_likes(
                 liked_ncm.add(nid)
                 actions += 1
                 unmatched_map.pop(key, None)
-            time.sleep(FEEDBACK_REQUEST_SLEEP)
+            time.sleep(FEEDBACK_LIKE_SLEEP)
         except Exception as e:
             log(f"  红心异常: {e}")
             row["action"] = "error"
@@ -966,13 +993,17 @@ def main(argv: Optional[list[str]] = None) -> int:
         log(f"状态: {STATE_FILE}")
 
     log("=== 完成 ===")
-    # 有硬错误则非 0
-    err = 0
-    if like_stats:
-        err += int(like_stats.get("errors") or 0)
-    if scrobble_stats:
-        err += int(scrobble_stats.get("errors") or 0)
-    return 1 if err else 0
+    # 部分成功（有红心/打卡）仍算 OK；仅当零成功且有错误才失败
+    like_ok = int((like_stats or {}).get("liked") or 0)
+    scrob_ok = int((scrobble_stats or {}).get("scrobbled") or 0)
+    like_err = int((like_stats or {}).get("errors") or 0)
+    scrob_err = int((scrobble_stats or {}).get("errors") or 0)
+    if like_err or scrob_err:
+        if like_ok or scrob_ok or int((like_stats or {}).get("already_liked") or 0):
+            log(f"有限流/部分失败 errors like={like_err} scrobble={scrob_err}，下轮继续")
+            return 0
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
