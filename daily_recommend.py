@@ -78,6 +78,21 @@ DATA_DIR = _resolve_path(os.environ.get("DATA_DIR", ""), ROOT / "data")
 # 可选：config.env 直接写 token；否则从 AM_CONFIG yaml 读 media-user-token
 MUSIC_USER_TOKEN = os.environ.get("MUSIC_USER_TOKEN", "").strip()
 DEVELOPER_TOKEN = os.environ.get("DEVELOPER_TOKEN", "").strip()  # 一般留空，自动抓取
+# Apple Music API 限速 / 429 重试
+try:
+    AM_MIN_INTERVAL = float(os.environ.get("AM_MIN_INTERVAL", "0.75") or "0.75")
+except ValueError:
+    AM_MIN_INTERVAL = 0.75
+try:
+    AM_429_RETRIES = int(os.environ.get("AM_429_RETRIES", "6") or "6")
+except ValueError:
+    AM_429_RETRIES = 6
+try:
+    AM_429_BASE_WAIT = float(os.environ.get("AM_429_BASE_WAIT", "3") or "3")
+except ValueError:
+    AM_429_BASE_WAIT = 3.0
+# 匹配时若首条搜索已高分则不再搜其它 term
+MATCH_EARLY_SCORE = float(os.environ.get("MATCH_EARLY_SCORE", "90") or "90")
 
 TODAY = date.today().isoformat()
 RUN_TS = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -115,6 +130,15 @@ def http_json(
             j = json.loads(raw) if raw else {}
         except json.JSONDecodeError:
             j = {"raw": raw[:800]}
+        if not isinstance(j, dict):
+            j = {"data": j}
+        # 供 429 退避：Retry-After 秒数或 HTTP-date（我们只解析整数秒）
+        try:
+            ra = e.headers.get("Retry-After") if e.headers else None
+            if ra is not None:
+                j["_retry_after"] = str(ra).strip()
+        except Exception:
+            pass
         return e.code, j
 
 
@@ -192,6 +216,10 @@ class AppleMusicClient:
         self.user = user_token
         self.storefront = storefront
         self.base = "https://api.music.apple.com"
+        self.min_interval = max(0.1, AM_MIN_INTERVAL)
+        self.max_429_retries = max(0, AM_429_RETRIES)
+        self._last_request_at = 0.0
+        self._consecutive_429 = 0
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -202,12 +230,63 @@ class AppleMusicClient:
             "User-Agent": UA,
         }
 
+    def _pace(self) -> None:
+        """请求间最小间隔，减轻 429。"""
+        gap = self.min_interval
+        # 连续撞限后临时拉大间隔
+        if self._consecutive_429 > 0:
+            gap = max(gap, min(5.0, self.min_interval * (1.0 + 0.5 * self._consecutive_429)))
+        elapsed = time.time() - self._last_request_at
+        if elapsed < gap:
+            time.sleep(gap - elapsed)
+
+    @staticmethod
+    def _retry_after_seconds(data: Any, attempt: int) -> float:
+        ra = None
+        if isinstance(data, dict):
+            ra = data.get("_retry_after")
+        if ra is not None:
+            try:
+                return max(1.0, float(str(ra).strip()))
+            except ValueError:
+                pass
+        # 指数退避 + 轻微抖动：3, 6, 12, 24... 封顶 60s
+        base = AM_429_BASE_WAIT * (2**attempt)
+        jitter = 0.25 * (attempt + 1)
+        return min(60.0, base + jitter)
+
     def request(
         self, path: str, method: str = "GET", body: Any = None, timeout: int = 45
     ) -> tuple[int, Any]:
-        return http_json(
-            self.base + path, method=method, headers=self._headers(), body=body, timeout=timeout
-        )
+        last_code = 0
+        last_data: Any = {}
+        for attempt in range(self.max_429_retries + 1):
+            self._pace()
+            code, data = http_json(
+                self.base + path,
+                method=method,
+                headers=self._headers(),
+                body=body,
+                timeout=timeout,
+            )
+            self._last_request_at = time.time()
+            last_code, last_data = code, data
+            if code != 429:
+                if code == 200:
+                    self._consecutive_429 = 0
+                return code, data
+            self._consecutive_429 += 1
+            if attempt >= self.max_429_retries:
+                break
+            wait = self._retry_after_seconds(data, attempt)
+            log(
+                f"  Apple API 429，{wait:.1f}s 后重试 "
+                f"({attempt + 1}/{self.max_429_retries}) {path[:80]}"
+            )
+            time.sleep(wait)
+            # 撞限后略提高全局间隔，后续请求更慢
+            self.min_interval = min(3.0, self.min_interval * 1.25)
+        return last_code, last_data
 
     def storefront_info(self) -> dict[str, Any]:
         code, data = self.request("/v1/me/storefront")
@@ -215,13 +294,16 @@ class AppleMusicClient:
             raise RuntimeError(f"storefront 失败 {code}: {data}")
         return data
 
-    def search_songs(self, term: str, limit: int = 15) -> list[dict[str, Any]]:
+    def search_songs(self, term: str, limit: int = 10) -> list[dict[str, Any]]:
         qs = urllib.parse.urlencode(
             {"term": term, "types": "songs", "limit": str(limit)}
         )
         code, data = self.request(
             f"/v1/catalog/{self.storefront}/search?{qs}"
         )
+        if code == 429:
+            log(f"  搜索仍 429（已重试）: {term[:60]}")
+            return []
         if code != 200:
             log(f"  搜索失败 {code}: {json.dumps(data, ensure_ascii=False)[:200]}")
             return []
@@ -587,20 +669,40 @@ def match_catalog(am: AppleMusicClient, ns: NeteaseSong) -> Optional[dict[str, A
         f"{ns.name} {ns.artists.split(' / ')[0]}" if ns.artists else ns.name,
         ns.name,
     ]
-    candidates: list[dict[str, Any]] = []
+    # 去重并去掉与 search_term 相同的重复查询
+    uniq_terms: list[str] = []
     seen: set[str] = set()
     for term in terms:
         term = term.strip()
         if not term or term in seen:
             continue
         seen.add(term)
-        candidates.extend(am.search_songs(term))
-        time.sleep(0.2)
+        uniq_terms.append(term)
+
+    candidates: list[dict[str, Any]] = []
     best: Optional[tuple[float, dict[str, Any]]] = None
-    for song in candidates:
-        sc = score_match(ns, song)
-        if best is None or sc > best[0]:
-            best = (sc, song)
+
+    def consider(songs: list[dict[str, Any]]) -> None:
+        nonlocal best
+        for song in songs:
+            sc = score_match(ns, song)
+            if best is None or sc > best[0]:
+                best = (sc, song)
+
+    for i, term in enumerate(uniq_terms):
+        batch = am.search_songs(term, limit=10)
+        candidates.extend(batch)
+        consider(batch)
+        # 高分命中：停止后续关键词
+        if best and best[0] >= MATCH_EARLY_SCORE:
+            break
+        # 已有不错匹配（>=70）且已搜过 ≥2 个 term：跳过更模糊的纯歌名
+        if i >= 1 and best and best[0] >= 70:
+            break
+        # 连续 429 耗尽重试后：多歇一会再继续
+        if not batch and am._consecutive_429 > 0:
+            time.sleep(min(8.0, 1.5 * am._consecutive_429))
+
     if not best or best[0] < 55:
         return None
     song = best[1]

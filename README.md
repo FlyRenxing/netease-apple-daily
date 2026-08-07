@@ -117,6 +117,9 @@ AM_CONFIG=./secrets/apple-music-config.yaml
 | `PLAYLIST_FOLDER_ID` | — | 文件夹 ID（优先于名称） |
 | `SKIP_IF_EXISTS` | `1` | 当日同名列表存在则跳过 |
 | `SKIP_UNMATCHED` | `1` | 个别曲未匹配仍继续 |
+| `AM_MIN_INTERVAL` | `0.75` | Apple API 请求最小间隔（秒），防 429 |
+| `AM_429_RETRIES` | `6` | 遇 429 重试次数（指数退避） |
+| `MATCH_EARLY_SCORE` | `90` | 匹配分达此值则不再搜其它关键词 |
 | `FEEDBACK_SYNC_LIKES` | `1` | 喜爱 → 红心 |
 | `FEEDBACK_SYNC_SCROBBLE` | `1` | 最近播放增量 → scrobble |
 | `FEEDBACK_DRY_RUN` | `0` | `1` 则只匹配不写 |
@@ -221,6 +224,7 @@ Cookie 失效后重新扫码即可。
 | 连不上 ncm-api | `docker compose up -d`；本机有 SOCKS 代理时需直连 `127.0.0.1`（脚本已 `unset` 代理） |
 | 列表不在文件夹内 | 确认 `PLAYLIST_FOLDER_NAME`；**已建列表 API 无法移动**，请 App 内手动拖一次 |
 | 大量未匹配 | 版权差异 / 改名；见当日 manifest |
+| 日志里大量 `429` | 已内置限速与重试；可调大 `AM_MIN_INTERVAL`（如 `1.2`） |
 | 找不到喜爱歌单 | 设置 `FEEDBACK_FAVORITES_PLAYLIST_ID` 或改 `FEEDBACK_FAVORITES_PLAYLIST_NAME` |
 | scrobble 一直 seed_only | 正常：首跑只建快照；再跑一次才会打新增曲 |
 
