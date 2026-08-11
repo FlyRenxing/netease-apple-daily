@@ -70,9 +70,14 @@ def main() -> int:
         or scrob.get("seed_only")
     )
 
-    if proc.returncode == 0 or has_progress:
-        status = "OK" if proc.returncode == 0 else "PARTIAL"
-        print(f"{status}: Apple Music → NetEase feedback")
+    # watchdog 语义：成功时静默（stdout 为空 → cron 不投递），失败才通知
+    if proc.returncode == 0:
+        # 完全成功 → 不打印，静默返回
+        return 0
+
+    if has_progress:
+        # 部分成功（底层仍报错）→ 通知
+        print("PARTIAL: Apple Music → NetEase feedback (some errors)")
         if dry:
             print("mode: dry-run")
         print(
@@ -95,9 +100,9 @@ def main() -> int:
                 f"unmatched {scrob.get('unmatched', 0)}, "
                 f"window {scrob.get('source_total', '?')})"
             )
-        if proc.returncode != 0 and likes.get("errors"):
+        if likes.get("errors"):
             print("note: some likes hit rate-limit; will continue next run")
-        return 0 if has_progress else (proc.returncode or 1)
+        return proc.returncode or 1
 
     print("ERROR: feedback sync failed")
     print(f"exit={proc.returncode}")

@@ -66,24 +66,11 @@ def main() -> int:
     folder_label = folder.get("name") or ""
 
     if man.get("skipped"):
-        print(f"SKIP: playlist already exists: {name}")
-        if pl_id:
-            print(f"id: {pl_id}")
-        if folder_label:
-            print(f"folder: {folder_label}")
+        # 已存在/跳过 → 正常无操作，静默（watchdog：成功不通知）
         return 0
 
     if proc.returncode == 0 and (stats.get("matched") or pl_id):
-        print("OK: NetEase daily recommend synced to Apple Music library")
-        print(f"playlist: {name}")
-        if folder_label:
-            print(f"folder: {folder_label}")
-        if pl_id:
-            print(f"id: {pl_id}")
-        print(
-            f"matched {stats.get('matched', '?')}/{stats.get('total', '?')}, "
-            f"unmatched {stats.get('unmatched', 0)}"
-        )
+        # 同步成功 → 静默（watchdog：成功不通知）
         return 0
 
     print("ERROR: sync failed")
